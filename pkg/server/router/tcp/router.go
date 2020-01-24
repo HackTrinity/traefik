@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/containous/traefik/v2/pkg/config/runtime"
 	"github.com/containous/traefik/v2/pkg/log"
@@ -213,35 +214,52 @@ func (m *Manager) buildEntryPointHandler(ctx context.Context, configs map[string
 		}
 
 		for _, domain := range domains {
-			logger.Debugf("Adding route %s on TCP", domain)
-			switch {
-			case routerConfig.TLS != nil:
-				if routerConfig.TLS.Passthrough {
-					router.AddRoute(domain, handler)
-				} else {
-					tlsOptionsName := routerConfig.TLS.Options
-
-					if len(tlsOptionsName) == 0 {
-						tlsOptionsName = defaultTLSConfigName
-					}
-
-					if tlsOptionsName != defaultTLSConfigName {
-						tlsOptionsName = internal.GetQualifiedName(ctxRouter, tlsOptionsName)
-					}
-
-					tlsConf, err := m.tlsManager.Get(defaultTLSStoreName, tlsOptionsName)
+			const connectPrefix = "CONNECT:"
+			if strings.HasPrefix(domain, connectPrefix) {
+				host := strings.TrimPrefix(domain, connectPrefix)
+				logger.Debugf("Adding HTTP CONNECT route %s on TCP", host)
+				if host == "*" {
+					err := router.AddCatchAll(handler)
 					if err != nil {
-						routerConfig.AddError(err, true)
-						logger.Debug(err)
-						continue
+						logger.Warn("TCP catch-all route previously set")
 					}
-
-					router.AddRouteTLS(domain, handler, tlsConf)
+				} else {
+					router.AddRouteHTTPConnect(host, handler)
 				}
-			case domain == "*":
-				router.AddCatchAllNoTLS(handler)
-			default:
-				logger.Warn("TCP Router ignored, cannot specify a Host rule without TLS")
+			} else {
+				logger.Debugf("Adding route %s on TCP", domain)
+				switch {
+				case routerConfig.TLS != nil:
+					if routerConfig.TLS.Passthrough {
+						router.AddPassthroughRoute(domain, handler)
+					} else {
+						tlsOptionsName := routerConfig.TLS.Options
+
+						if len(tlsOptionsName) == 0 {
+							tlsOptionsName = defaultTLSConfigName
+						}
+
+						if tlsOptionsName != defaultTLSConfigName {
+							tlsOptionsName = internal.GetQualifiedName(ctxRouter, tlsOptionsName)
+						}
+
+						tlsConf, err := m.tlsManager.Get(defaultTLSStoreName, tlsOptionsName)
+						if err != nil {
+							routerConfig.AddError(err, true)
+							logger.Debug(err)
+							continue
+						}
+
+						router.AddRouteTLS(domain, handler, tlsConf)
+					}
+				case domain == "*":
+					err := router.AddCatchAll(handler)
+					if err != nil {
+						logger.Warn("TCP catch-all route previously set")
+					}
+				default:
+					logger.Warn("TCP Router ignored, cannot specify a Host rule without TLS")
+				}
 			}
 		}
 	}

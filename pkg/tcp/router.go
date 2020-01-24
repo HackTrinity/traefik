@@ -11,26 +11,28 @@ import (
 	"time"
 
 	"github.com/containous/traefik/v2/pkg/log"
+	"github.com/gravitational/trace"
 )
 
 // Router is a TCP router
 type Router struct {
-	routingTable      map[string]Handler
-	httpForwarder     Handler
-	httpsForwarder    Handler
-	httpHandler       http.Handler
-	httpsHandler      http.Handler
-	httpsTLSConfig    *tls.Config // default TLS config
-	catchAllNoTLS     Handler
-	hostHTTPTLSConfig map[string]*tls.Config // TLS configs keyed by SNI
+	routingTable        map[string]Handler
+	connectRoutingTable map[string]Handler
+	httpForwarder       Handler
+	httpsForwarder      Handler
+	httpHandler         http.Handler
+	httpsHandler        http.Handler
+	httpsTLSConfig      *tls.Config // default TLS config
+	catchAll            Handler
+	hostHTTPTLSConfig   map[string]*tls.Config // TLS configs keyed by SNI
 }
 
 // ServeTCP forwards the connection to the right TCP/HTTP handler
 func (r *Router) ServeTCP(conn WriteCloser) {
 	// FIXME -- Check if ProxyProtocol changes the first bytes of the request
 
-	if r.catchAllNoTLS != nil && len(r.routingTable) == 0 {
-		r.catchAllNoTLS.ServeTCP(conn)
+	if r.catchAll != nil && len(r.routingTable) == 0 && len(r.connectRoutingTable) == 0 {
+		r.catchAll.ServeTCP(conn)
 		return
 	}
 
@@ -53,14 +55,39 @@ func (r *Router) ServeTCP(conn WriteCloser) {
 	}
 
 	if !tls {
-		switch {
-		case r.catchAllNoTLS != nil:
-			r.catchAllNoTLS.ServeTCP(r.GetConn(conn, peeked))
-		case r.httpForwarder != nil:
-			r.httpForwarder.ServeTCP(r.GetConn(conn, peeked))
-		default:
+		host, connect, peeked, err := httpConnectHost(br)
+		if err != nil {
 			conn.Close()
+			return
 		}
+
+		if !connect {
+			switch {
+			case r.catchAll != nil:
+				r.catchAll.ServeTCP(r.GetConn(conn, peeked))
+			case r.httpForwarder != nil:
+				r.httpForwarder.ServeTCP(r.GetConn(conn, peeked))
+			default:
+				conn.Close()
+			}
+			return
+		}
+
+		host = strings.ToLower(host)
+		if r.connectRoutingTable != nil {
+			if target, ok := r.connectRoutingTable[host]; ok {
+				target.ServeTCP(r.GetConn(conn, peeked))
+				return
+			}
+		}
+
+		// FIXME Needs tests
+		if target, ok := r.connectRoutingTable["*"]; ok {
+			target.ServeTCP(r.GetConn(conn, peeked))
+			return
+		}
+
+		conn.Close()
 		return
 	}
 
@@ -86,8 +113,8 @@ func (r *Router) ServeTCP(conn WriteCloser) {
 	}
 }
 
-// AddRoute defines a handler for a given sniHost (* is the only valid option)
-func (r *Router) AddRoute(sniHost string, target Handler) {
+// AddPassthroughRoute defines a handler for a given sniHost
+func (r *Router) AddPassthroughRoute(sniHost string, target Handler) {
 	if r.routingTable == nil {
 		r.routingTable = map[string]Handler{}
 	}
@@ -96,7 +123,7 @@ func (r *Router) AddRoute(sniHost string, target Handler) {
 
 // AddRouteTLS defines a handler for a given sniHost and sets the matching tlsConfig
 func (r *Router) AddRouteTLS(sniHost string, target Handler, config *tls.Config) {
-	r.AddRoute(sniHost, &TLSHandler{
+	r.AddPassthroughRoute(sniHost, &TLSHandler{
 		Next:   target,
 		Config: config,
 	})
@@ -110,9 +137,22 @@ func (r *Router) AddRouteHTTPTLS(sniHost string, config *tls.Config) {
 	r.hostHTTPTLSConfig[sniHost] = config
 }
 
-// AddCatchAllNoTLS defines the fallback tcp handler
-func (r *Router) AddCatchAllNoTLS(handler Handler) {
-	r.catchAllNoTLS = handler
+// AddRouteHTTPConnect defines a handler for a given connectHost
+func (r *Router) AddRouteHTTPConnect(connectHost string, target Handler) {
+	if r.connectRoutingTable == nil {
+		r.connectRoutingTable = map[string]Handler{}
+	}
+	r.connectRoutingTable[strings.ToLower(connectHost)] = target
+}
+
+// AddCatchAll defines the fallback tcp handler
+func (r *Router) AddCatchAll(handler Handler) error {
+	if r.catchAll != nil {
+		return trace.AlreadyExists("catch all route already set")
+	}
+
+	r.catchAll = handler
+	return nil
 }
 
 // GetConn creates a connection proxy with a peeked string
@@ -188,6 +228,29 @@ func (c *Conn) Read(p []byte) (n int, err error) {
 		return n, nil
 	}
 	return c.WriteCloser.Read(p)
+}
+
+func httpConnectHost(br *bufio.Reader) (string, bool, string, error) {
+	method, err := br.Peek(len(http.MethodConnect))
+	if err != nil {
+		opErr, ok := err.(*net.OpError)
+		if err != io.EOF && (!ok || !opErr.Timeout()) {
+			log.WithoutContext().Errorf("Error while Peeking first %v bytes: %s", len(http.MethodConnect), err)
+		}
+		return "", false, "", err
+	}
+
+	if method := string(method); method != http.MethodConnect {
+		return "", false, getPeeked(br), nil
+	}
+
+	req, err := http.ReadRequest(br)
+	if err != nil {
+		log.Errorf("Error while parsing CONNECT request: %s", err)
+		return "", false, getPeeked(br), nil
+	}
+
+	return req.Host, true, "", nil
 }
 
 // clientHelloServerName returns the SNI server name inside the TLS ClientHello,

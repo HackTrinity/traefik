@@ -12,6 +12,10 @@
 /traefik
 /traefik.toml
 /traefik.yml
+/traefik.yaml
+/dynamic.toml
+/dynamic.yml
+/dynamic.yaml
 *.log
 *.exe
 cover.out

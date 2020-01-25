@@ -214,7 +214,7 @@ func (m *Manager) buildEntryPointHandler(ctx context.Context, configs map[string
 		}
 
 		for _, domain := range domains {
-			const connectPrefix = "CONNECT:"
+			const connectPrefix = "connect:"
 			if strings.HasPrefix(domain, connectPrefix) {
 				host := strings.TrimPrefix(domain, connectPrefix)
 				logger.Debugf("Adding HTTP CONNECT route %s on TCP", host)

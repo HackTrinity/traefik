@@ -26,7 +26,7 @@ func NewManager(conf *runtime.Configuration) *Manager {
 }
 
 // BuildTCP Creates a tcp.Handler for a service configuration.
-func (m *Manager) BuildTCP(rootCtx context.Context, serviceName string) (tcp.Handler, error) {
+func (m *Manager) BuildTCP(rootCtx context.Context, serviceName string, httpConnect bool) (tcp.Handler, error) {
 	serviceQualifiedName := internal.GetQualifiedName(rootCtx, serviceName)
 	ctx := internal.AddProviderInContext(rootCtx, serviceQualifiedName)
 	ctx = log.With(ctx, log.Str(log.ServiceName, serviceName))
@@ -59,7 +59,7 @@ func (m *Manager) BuildTCP(rootCtx context.Context, serviceName string) (tcp.Han
 				continue
 			}
 
-			handler, err := tcp.NewProxy(server.Address, duration)
+			handler, err := tcp.NewProxy(server.Address, duration, httpConnect)
 			if err != nil {
 				logger.Errorf("In service %q server %q: %v", serviceQualifiedName, server.Address, err)
 				continue
@@ -72,7 +72,7 @@ func (m *Manager) BuildTCP(rootCtx context.Context, serviceName string) (tcp.Han
 	case conf.Weighted != nil:
 		loadBalancer := tcp.NewWRRLoadBalancer()
 		for _, service := range conf.Weighted.Services {
-			handler, err := m.BuildTCP(rootCtx, service.Name)
+			handler, err := m.BuildTCP(rootCtx, service.Name, httpConnect)
 			if err != nil {
 				logger.Errorf("In service %q: %v", serviceQualifiedName, err)
 				return nil, err

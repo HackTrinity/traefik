@@ -12,16 +12,17 @@ import (
 type Proxy struct {
 	target           *net.TCPAddr
 	terminationDelay time.Duration
+	httpConnect      bool
 }
 
 // NewProxy creates a new Proxy
-func NewProxy(address string, terminationDelay time.Duration) (*Proxy, error) {
+func NewProxy(address string, terminationDelay time.Duration, httpConnect bool) (*Proxy, error) {
 	tcpAddr, err := net.ResolveTCPAddr("tcp", address)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Proxy{target: tcpAddr, terminationDelay: terminationDelay}, nil
+	return &Proxy{target: tcpAddr, terminationDelay: terminationDelay, httpConnect: httpConnect}, nil
 }
 
 // ServeTCP forwards the connection to a service
@@ -34,7 +35,15 @@ func (p *Proxy) ServeTCP(conn WriteCloser) {
 	connBackend, err := net.DialTCP("tcp", nil, p.target)
 	if err != nil {
 		log.Errorf("Error while connection to backend: %v", err)
+		if p.httpConnect {
+			conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		}
 		return
+	}
+	if p.httpConnect {
+		if _, err := conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+			log.Errorf("Error while writing CONNECT response to client: %v", err)
+		}
 	}
 
 	// maybe not needed, but just in case

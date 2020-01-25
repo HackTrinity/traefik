@@ -198,7 +198,13 @@ func (m *Manager) buildEntryPointHandler(ctx context.Context, configs map[string
 			continue
 		}
 
-		handler, err := m.serviceManager.BuildTCP(ctxRouter, routerConfig.Service)
+		tlsHandler, err := m.serviceManager.BuildTCP(ctxRouter, routerConfig.Service, false)
+		if err != nil {
+			routerConfig.AddError(err, true)
+			logger.Error(err)
+			continue
+		}
+		connectHandler, err := m.serviceManager.BuildTCP(ctxRouter, routerConfig.Service, true)
 		if err != nil {
 			routerConfig.AddError(err, true)
 			logger.Error(err)
@@ -219,19 +225,19 @@ func (m *Manager) buildEntryPointHandler(ctx context.Context, configs map[string
 				host := strings.TrimPrefix(domain, connectPrefix)
 				logger.Debugf("Adding HTTP CONNECT route %s on TCP", host)
 				if host == "*" {
-					err := router.AddCatchAll(handler)
+					err := router.AddCatchAll(connectHandler)
 					if err != nil {
 						logger.Warn("TCP catch-all route previously set")
 					}
 				} else {
-					router.AddRouteHTTPConnect(host, handler)
+					router.AddRouteHTTPConnect(host, connectHandler)
 				}
 			} else {
 				logger.Debugf("Adding route %s on TCP", domain)
 				switch {
 				case routerConfig.TLS != nil:
 					if routerConfig.TLS.Passthrough {
-						router.AddPassthroughRoute(domain, handler)
+						router.AddPassthroughRoute(domain, tlsHandler)
 					} else {
 						tlsOptionsName := routerConfig.TLS.Options
 
@@ -250,10 +256,10 @@ func (m *Manager) buildEntryPointHandler(ctx context.Context, configs map[string
 							continue
 						}
 
-						router.AddRouteTLS(domain, handler, tlsConf)
+						router.AddRouteTLS(domain, tlsHandler, tlsConf)
 					}
 				case domain == "*":
-					err := router.AddCatchAll(handler)
+					err := router.AddCatchAll(tlsHandler)
 					if err != nil {
 						logger.Warn("TCP catch-all route previously set")
 					}

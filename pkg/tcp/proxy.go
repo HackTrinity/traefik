@@ -41,7 +41,7 @@ func (p *Proxy) ServeTCP(conn WriteCloser) {
 		return
 	}
 	if p.httpConnect {
-		if _, err := conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+		if _, err := conn.Write([]byte("HTTP/1.1 200 Ok Boomer\r\n\r\n")); err != nil {
 			log.Errorf("Error while writing CONNECT response to client: %v", err)
 		}
 	}
